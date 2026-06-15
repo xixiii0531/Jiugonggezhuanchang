@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vibe Coding - Premium 9-Grid Fabric Stage</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --bg-color: #06070a;
+            --accent-color: #66fcf1;
+            --border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body, html { width: 100%; height: 100%; background-color: var(--bg-color); font-family: -apple-system, BlinkMacSystemFont, sans-serif; overflow: hidden; }
+
+        #interactiveProgress {
+            position: fixed; top: 0; left: 0; height: 6px; width: 0%; z-index: 200; 
+            transition: width 0.08s linear; pointer-events: none;
+        }
+
+        .setup-overlay {
+            position: fixed; inset: 0; background: linear-gradient(135deg, #090a0f, #131622); z-index: 100;
+            display: flex; flex-direction: column; justify-content: center; align-items: center; transition: opacity 0.8s ease;
+        }
+        .setup-overlay.hidden { opacity: 0; pointer-events: none; }
+
+        .btn {
+            background: transparent; color: var(--accent-color); border: 2px solid var(--accent-color);
+            padding: 16px 45px; font-size: 1.1rem; font-weight: bold; border-radius: 40px; cursor: pointer;
+            transition: all 0.3s; box-shadow: 0 0 25px rgba(102, 252, 241, 0.2); letter-spacing: 1px;
+        }
+        .btn:hover { background: var(--accent-color); color: #000; box-shadow: 0 0 35px rgba(102, 252, 241, 0.6); }
+        #fileInput { display: none; }
+
+        .main-stage {
+            position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center;
+            transition: opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .main-stage.blurred { opacity: 0.15; pointer-events: none; }
+
+        .webcam-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); z-index: 1; opacity: 0.9; }
+
+        .overlay-container {
+            position: relative; z-index: 2; width: 100%; max-width: 1240px; height: 100%; max-height: 820px;
+            display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 20px; padding: 30px;
+        }
+
+        .material-slot {
+            background: rgba(0, 0, 0, 0.5);
+            border-left: 2px dashed var(--border-color);
+            border-bottom: 2px dashed var(--border-color);
+            border-right: 2px dashed var(--border-color);
+            border-top: none;
+            border-radius: 0 0 16px 16px; overflow: hidden; position: relative; cursor: pointer;
+            backdrop-filter: blur(5px); box-shadow: inset 0 0 25px rgba(0,0,0,0.7); aspect-ratio: 16 / 9;
+        }
+        
+        .material-slot .asset-video { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+
+        .webcam-curtain-wrapper { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; overflow: hidden; }
+        .webcam-curtain-video { position: absolute; object-fit: cover; transform: scaleX(-1); pointer-events: none; }
+
+        /* 标准3×3九宫格排布 */
+        .slot-0 { grid-area: 1 / 1; } .slot-1 { grid-area: 1 / 2; } .slot-2 { grid-area: 1 / 3; }
+        .slot-3 { grid-area: 2 / 1; } .slot-4 { grid-area: 2 / 2; } .slot-5 { grid-area: 2 / 3; }
+        .slot-6 { grid-area: 3 / 1; } .slot-7 { grid-area: 3 / 2; } .slot-8 { grid-area: 3 / 3; }
+
+        .tracker-node { position: absolute; width: 22px; height: 22px; border-radius: 50%; pointer-events: none; display: none; z-index: 99; transform: translate(-50%, -50%); }
+        .tracker-pinch { border: 2px solid #66fcf1; background: rgba(102, 252, 241, 0.4); box-shadow: 0 0 20px #66fcf1; }
+        .tracker-open { border: 2px solid #ff4757; background: rgba(255, 71, 87, 0.3); box-shadow: 0 0 20px #ff4757; }
+
+        .theater-overlay {
+            position: fixed; inset: 0; z-index: 50; display: flex; justify-content: center; align-items: center;
+            opacity: 0; pointer-events: none; transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .theater-overlay.active { opacity: 1; pointer-events: auto; }
+        
+        .theater-carousel-container { width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; overflow: hidden; position: relative; }
+        .theater-carousel { display: flex; gap: 60px; position: absolute; left: calc(50% - 275px); transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1); align-items: center; }
+
+        .theater-item {
+            width: 550px; aspect-ratio: 16 / 9; background: #000; border-radius: 20px; overflow: hidden;
+            transition: all 0.45s cubic-bezier(0.16, 1, 0.3, 1); transform: scale(0.75); opacity: 0.3;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.6); flex-shrink: 0; cursor: pointer; border: 2px solid transparent; position: relative;
+        }
+        
+        .theater-item.active {
+            transform: scale(1.22); opacity: 1; z-index: 5; border-color: var(--accent-color);
+            box-shadow: 0 30px 70px rgba(102, 252, 241, 0.25), 0 0 35px rgba(102, 252, 241, 0.15);
+        }
+        .theater-item video { width: 100%; height: 100%; object-fit: contain; }
+
+        .close-btn {
+            position: absolute; top: 40px; right: 40px; background: rgba(255,255,255,0.06); color: white;
+            border: none; width: 55px; height: 55px; border-radius: 50%; font-size: 1.8rem; cursor: pointer;
+            display: flex; justify-content: center; align-items: center; transition: all 0.3s; z-index: 60;
+        }
+        .close-btn:hover { background: rgba(255,255,255,0.2); transform: rotate(90deg); }
+
+        .theater-overlay.fullscreen-active .theater-carousel { left: 0 !important; top: 0 !important; transform: none !important; width: 100vw; height: 100vh; gap: 0; }
+        .theater-overlay.fullscreen-active .theater-item { display: none; }
+        .theater-overlay.fullscreen-active .theater-item.active {
+            display: block; position: fixed; inset: 0; width: 100vw; height: 100vh;
+            transform: scale(1) !important; border-radius: 0 !important; border: none !important; box-shadow: none !important; z-index: 150;
+        }
+        .theater-overlay.fullscreen-active .theater-item.active video { object-fit: contain; background: #000; }
+        .theater-overlay.fullscreen-active .close-btn { z-index: 160; }
+    </style>
+</head>
+<body>
+
+    <div id="interactiveProgress"></div>
+
+    <svg style="position: absolute; width:0; height:0;">
+        <defs>
+            <clipPath id="curtain-clip-0" clipPathUnits="objectBoundingBox"><path id="path-0" d="M 0 0 L 1 0 L 1 1 L 0 1 Z" /></clipPath>
+            <clipPath id="curtain-clip-1" clipPathUnits="objectBoundingBox"><path id="path-1" d="M 0 0 L 1 0 L 1 1 L 0 1 Z" /></clipPath>
+            <clipPath id="curtain-clip-2" clipPathUnits="objectBoundingBox"><path id="path-2" d="M 0 0 L 1 0 L 1 1 L 0 1 Z" /></clipPath>
+            <clipPath id="curtain-clip-3" clipPathUnits="objectBoundingBox"><path id="path-3" d="M 0 0 L 1 0 L 1 1 L 0 1 Z" /></clipPath>
+            <clipPath id="curtain-clip-4" clipPathUnits="objectBoundingBox"><path id="path-4" d="M 0 0 L 1 0 L 1 1 L 0 1 Z" /></clipPath>
+            <clipPath id="curtain-clip-5" clipPathUnits="objectBoundingBox"><path id="path-5" d="M 0 0 L 1 0 L 1 1 L 0 1 Z" /></clipPath>
+            <clipPath id="curtain-clip-6" clipPathUnits="objectBoundingBox"><path id="path-6" d="M 0 0 L 1 0 L 1 1 L 0 1 Z" /></clipPath>
+            <clipPath id="curtain-clip-7" clipPathUnits="objectBoundingBox"><path id="path-7" d="M 0 0 L 1 0 L 1 1 L 0 1 Z" /></clipPath>
+            <clipPath id="curtain-clip-8" clipPathUnits="objectBoundingBox"><path id="path-8" d="M 0 0 L 1 0 L 1 1 L 0 1 Z" /></clipPath>
+        </defs>
+    </svg>
+
+    <div class="setup-overlay" id="setupOverlay">
+        <button class="btn" onclick="fileInput.click()">ENTER STAGE</button>
+        <input type="file" id="fileInput" multiple accept="video/*" onchange="initApp(event)">
+    </div>
+
+    <div class="main-stage" id="mainStage">
+        <video class="webcam-video" id="webcam" autoplay playsinline muted></video>
+
+        <div class="overlay-container" id="overlayContainer">
+            <div class="material-slot slot-0"><video class="asset-video" muted loop></video><div class="webcam-curtain-wrapper" style="clip-path: url(#curtain-clip-0);"><video class="webcam-curtain-video" muted autoplay playsinline></video></div></div>
+            <div class="material-slot slot-1"><video class="asset-video" muted loop></video><div class="webcam-curtain-wrapper" style="clip-path: url(#curtain-clip-1);"><video class="webcam-curtain-video" muted autoplay playsinline></video></div></div>
+            <div class="material-slot slot-2"><video class="asset-video" muted loop></video><div class="webcam-curtain-wrapper" style="clip-path: url(#curtain-clip-2);"><video class="webcam-curtain-video" muted autoplay playsinline></video></div></div>
+            <div class="material-slot slot-3"><video class="asset-video" muted loop></video><div class="webcam-curtain-wrapper" style="clip-path: url(#curtain-clip-3);"><video class="webcam-curtain-video" muted autoplay playsinline></video></div></div>
+            <div class="material-slot slot-4"><video class="asset-video" muted loop></video><div class="webcam-curtain-wrapper" style="clip-path: url(#curtain-clip-4);"><video class="webcam-curtain-video" muted autoplay playsinline></video></div></div>
+            <div class="material-slot slot-5"><video class="asset-video" muted loop></video><div class="webcam-curtain-wrapper" style="clip-path: url(#curtain-clip-5);"><video class="webcam-curtain-video" muted autoplay playsinline></video></div></div>
+            <div class="material-slot slot-6"><video class="asset-video" muted loop></video><div class="webcam-curtain-wrapper" style="clip-path: url(#curtain-clip-6);"><video class="webcam-curtain-video" muted autoplay playsinline></video></div></div>
+            <div class="material-slot slot-7"><video class="asset-video" muted loop></video><div class="webcam-curtain-wrapper" style="clip-path: url(#curtain-clip-7);"><video class="webcam-curtain-video" muted autoplay playsinline></video></div></div>
+            <div class="material-slot slot-8"><video class="asset-video" muted loop></video><div class="webcam-curtain-wrapper" style="clip-path: url(#curtain-clip-8);"><video class="webcam-curtain-video" muted autoplay playsinline></video></div></div>
+        </div>
+    </div>
+
+    <div class="tracker-node tracker-pinch" id="trackerPinch"></div>
+    <div class="tracker-node tracker-open" id="trackerOpen"></div>
+
+    <div class="theater-overlay" id="theaterOverlay" onclick="closeTheater()">
+        <button class="close-btn" onclick="closeTheater()">&times;</button>
+        <div class="theater-carousel-container" onclick="event.stopPropagation()">
+            <div class="theater-carousel" id="theaterCarousel">
+                <div class="theater-item" onclick="setTheaterIndex(0)"><video id="th-video-0" controls muted loop></video></div>
+                <div class="theater-item" onclick="setTheaterIndex(1)"><video id="th-video-1" controls muted loop></video></div>
+                <div class="theater-item" onclick="setTheaterIndex(2)"><video id="th-video-2" controls muted loop></video></div>
+                <div class="theater-item" onclick="setTheaterIndex(3)"><video id="th-video-3" controls muted loop></video></div>
+                <div class="theater-item" onclick="setTheaterIndex(4)"><video id="th-video-4" controls muted loop></video></div>
+                <div class="theater-item" onclick="setTheaterIndex(5)"><video id="th-video-5" controls muted loop></video></div>
+                <div class="theater-item" onclick="setTheaterIndex(6)"><video id="th-video-6" controls muted loop></video></div>
+                <div class="theater-item" onclick="setTheaterIndex(7)"><video id="th-video-7" controls muted loop></video></div>
+                <div class="theater-item" onclick="setTheaterIndex(8)"><video id="th-video-8" controls muted loop></video></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const setupOverlay = document.getElementById('setupOverlay');
+        const mainStage = document.getElementById('mainStage');
+        const webcam = document.getElementById('webcam');
+        const trackerPinch = document.getElementById('trackerPinch');
+        const trackerOpen = document.getElementById('trackerOpen');
+        const theaterOverlay = document.getElementById('theaterOverlay');
+        const theaterCarousel = document.getElementById('theaterCarousel');
+        const slots = document.querySelectorAll('.material-slot');
+        const progressBar = document.getElementById('interactiveProgress');
+
+        let videoSources = {};
+        let slotStates = Array.from({length: 9}, () => ({ opened: false }));
+        
+        let activeSlotIndex = null;
+        let lastHandX = 0;
+
+        let isTheaterActive = false;
+        let isFullscreenActive = false;
+        let theaterActiveIndex = 0;
+        
+        let twoPalmsDurationStart = null;
+        let twoPinchesDurationStart = null;
+        let gestureCooldown = false;
+        let theaterLockUntil = 0; 
+
+        const GRID_W = 8;
+        const GRID_H = 8;
+        let clothModels = [];
+
+        function createClothInstance() {
+            let particles = [];
+            let springs = [];
+            for (let y = 0; y <= GRID_H; y++) {
+                for (let x = 0; x <= GRID_W; x++) {
+                    let initialY = (y / GRID_H) * 0.95;
+                    particles.push({ x: x / GRID_W, y: initialY, ox: x / GRID_W, oy: initialY, vx: 0, vy: 0, isPinned: (y === 0) });
+                }
+            }
+            for (let y = 0; y <= GRID_H; y++) {
+                for (let x = 0; x <= GRID_W; x++) {
+                    let idx = y * (GRID_W + 1) + x;
+                    if (x < GRID_W) springs.push({ p1: idx, p2: idx + 1, len: 1 / GRID_W });
+                    if (y < GRID_H) springs.push({ p1: idx, p2: idx + (GRID_W + 1), len: 1 / GRID_H });
+                    if (x < GRID_W && y < GRID_H) {
+                        springs.push({ p1: idx, p2: idx + (GRID_W + 2), len: Math.hypot(1/GRID_W, 1/GRID_H) });
+                    }
+                }
+            }
+            return { particles, springs, grabbedNode: null };
+        }
+
+        for(let i=0; i<9; i++) clothModels.push(createClothInstance());
+
+        function alignCurtainVideos() {
+            const vw = window.innerWidth; const vh = window.innerHeight;
+            slots.forEach((slot, index) => {
+                const rect = slot.getBoundingClientRect();
+                const vid = slot.querySelector('.webcam-curtain-video');
+                if (vid) { vid.style.width = vw + 'px'; vid.style.height = vh + 'px'; vid.style.left = -rect.left + 'px'; vid.style.top = -rect.top + 'px'; }
+            });
+        }
+        window.addEventListener('resize', alignCurtainVideos);
+
+        async function initApp(event) {
+            const files = Array.from(event.target.files).filter(f => f.type.startsWith('video/'));
+            if (files.length === 0) return;
+            slots.forEach((slot, index) => {
+                const file = files[index]; const assetVideo = slot.querySelector('.asset-video'); const thVideo = document.getElementById(`th-video-${index}`);
+                if (file) {
+                    videoSources[index] = URL.createObjectURL(file); assetVideo.src = videoSources[index];
+                    if (thVideo) thVideo.src = videoSources[index];
+                } else { 
+                    slot.style.display = 'none'; const thItem = document.querySelectorAll('.theater-item')[index]; if(thItem) thItem.style.display = 'none';
+                }
+            });
+            setupOverlay.classList.add('hidden');
+            await startWebcamAndAI();
+            setTimeout(alignCurtainVideos, 300);
+            requestAnimationFrame(physicsLoop);
+        }
+
+        async function startWebcamAndAI() {
+            try {
+                let stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } }); webcam.srcObject = stream;
+                document.querySelectorAll('.webcam-curtain-video').forEach(v => { v.srcObject = stream; v.play().catch(()=>{}); });
+            } catch (err) { console.log("Camera fallback enabled."); }
+
+            const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+            hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+            hands.onResults(onHandResults);
+            new Camera(webcam, { onFrame: async () => { await hands.send({ image: webcam }); }, width: 640, height: 480 }).start();
+        }
+
+        // 矩阵级优化：标准3x3九宫格数学判定
+        function getSlotIndexFromCoords(x, y) {
+            let col = x < 0.33 ? 0 : (x < 0.66 ? 1 : 2); 
+            let row = y < 0.33 ? 0 : (y < 0.66 ? 1 : 2);
+            return row * 3 + col;
+        }
+
+        function onHandResults(results) {
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) { 
+                trackerPinch.style.display = 'none'; trackerOpen.style.display = 'none'; handleRelease(); lastHandX = 0;
+                twoPalmsDurationStart = null; twoPinchesDurationStart = null; gestureCooldown = false; progressBar.style.width = '0%'; return; 
+            }
+
+            const numHands = results.multiHandLandmarks.length;
+            let handStates = results.multiHandLandmarks.map(landmarks => {
+                const thumbTip = landmarks[4]; const indexTip = landmarks[8];
+                const dist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
+                return { visualX: 1 - (thumbTip.x + indexTip.x) / 2, visualY: (thumbTip.y + indexTip.y) / 2, isPinching: dist < 0.045, isOpen: dist > 0.13 };
+            });
+
+            let pinchHand = handStates.find(h => h.isPinching);
+            let openHand = handStates.find(h => h.isOpen);
+
+            if (pinchHand) { trackerPinch.style.display = 'block'; trackerPinch.style.left = `${pinchHand.visualX * 100}%`; trackerPinch.style.top = `${pinchHand.visualY * 100}%`; } else { trackerPinch.style.display = 'none'; }
+            if (openHand) { trackerOpen.style.display = 'block'; trackerOpen.style.left = `${openHand.visualX * 100}%`; trackerOpen.style.top = `${openHand.visualY * 100}%`; } else { trackerOpen.style.display = 'none'; }
+
+            if (isTheaterActive) {
+                let openHandsCount = handStates.filter(h => h.isOpen).length;
+                let pinchHandsCount = handStates.filter(h => h.isPinching).length;
+
+                // 双捏1.2秒退出剧场回到九宫格主界面
+                if (pinchHandsCount === 2) {
+                    twoPalmsDurationStart = null;
+                    if (!twoPinchesDurationStart) {
+                        twoPinchesDurationStart = performance.now();
+                    } else {
+                        let elapsed = performance.now() - twoPinchesDurationStart;
+                        let pct = Math.min(100, (elapsed / 1200) * 100);
+                        progressBar.style.background = 'linear-gradient(90deg, #ff4757, #ff6b81)';
+                        progressBar.style.boxShadow = '0 0 15px #ff4757';
+                        progressBar.style.width = `${pct}%`;
+
+                        if (elapsed >= 1200 && !gestureCooldown) {
+                            closeTheater();
+                            gestureCooldown = true; twoPinchesDurationStart = null; progressBar.style.width = '0%';
+                        }
+                    }
+                } 
+                // 双手掌张开1.2秒触发全屏
+                else if (openHandsCount === 2) {
+                    twoPinchesDurationStart = null;
+                    if (!twoPalmsDurationStart) {
+                        twoPalmsDurationStart = performance.now();
+                    } else {
+                        let elapsed = performance.now() - twoPalmsDurationStart;
+                        let pct = Math.min(100, (elapsed / 1200) * 100);
+                        progressBar.style.background = 'linear-gradient(90deg, #66fcf1, #00e5ff)';
+                        progressBar.style.boxShadow = '0 0 15px #66fcf1';
+                        progressBar.style.width = `${pct}%`;
+
+                        if (elapsed >= 1200 && !gestureCooldown) {
+                            toggleFullscreenMode();
+                            gestureCooldown = true; twoPalmsDurationStart = null; progressBar.style.width = '0%';
+                        }
+                    }
+                } else {
+                    twoPalmsDurationStart = null; twoPinchesDurationStart = null; gestureCooldown = false; progressBar.style.width = '0%';
+                }
+
+                if (isFullscreenActive) return;
+                if (performance.now() < theaterLockUntil) return;
+
+                if (openHand) {
+                    let targetIdx = Math.floor(openHand.visualX * 9); targetIdx = Math.max(0, Math.min(8, targetIdx));
+                    if (targetIdx !== theaterActiveIndex && videoSources[targetIdx]) { theaterActiveIndex = targetIdx; updateTheaterCarousel(); }
+                }
+                return;
+            }
+
+            // 大摆动全局手势
+            if (openHand && !pinchHand) {
+                if (lastHandX !== 0) {
+                    let deltaHandX = openHand.visualX - lastHandX;
+                    if (deltaHandX > 0.028) { triggerSwipeOpenAll(); lastHandX = openHand.visualX; return; }
+                    else if (deltaHandX < -0.028) { triggerSwipeCloseAll(); lastHandX = openHand.visualX; return; }
+                }
+                lastHandX = openHand.visualX;
+            } else { lastHandX = 0; }
+
+            // 双手联动进入剧场
+            if (numHands === 2 && pinchHand && openHand) {
+                const idx = getSlotIndexFromCoords(pinchHand.visualX, pinchHand.visualY);
+                if (idx !== null && slotStates[idx].opened) { zoomVideo(idx); activeSlotIndex = null; return; }
+            }
+
+            // 单格布料互动
+            if (pinchHand) {
+                const vX = pinchHand.visualX; const vY = pinchHand.visualY;
+                if (activeSlotIndex === null) {
+                    const idx = getSlotIndexFromCoords(vX, vY);
+                    if (idx !== null && !slotStates[idx].opened) {
+                        activeSlotIndex = idx; const cloth = clothModels[idx]; const rect = slots[idx].getBoundingClientRect();
+                        let hx = (vX * window.innerWidth - rect.left) / rect.width; let hy = (vY * window.innerHeight - rect.top) / rect.height;
+                        let nX = Math.round(Math.min(1, Math.max(0, hx)) * GRID_W); let nY = Math.round(Math.min(1, Math.max(0, hy)) * GRID_H);
+                        cloth.grabbedNode = nY * (GRID_W + 1) + nX;
+                    }
+                }
+                if (activeSlotIndex !== null) {
+                    const cloth = clothModels[activeSlotIndex]; const rect = slots[activeSlotIndex].getBoundingClientRect();
+                    let hx = (vX * window.innerWidth - rect.left) / rect.width; let hy = (vY * window.innerHeight - rect.top) / rect.height;
+                    
+                    if (cloth.grabbedNode !== null) {
+                        let p = cloth.particles[cloth.grabbedNode];
+                        p.x = p.x + (hx - p.x) * 0.45; p.y = p.y + (hy - p.y) * 0.45;
+
+                        let pullDistance = Math.hypot(p.x - p.ox, p.y - p.oy);
+                        if (pullDistance > 0.28 || hy > 0.75 || hx < 0.12 || hx > 0.88) {
+                            lockSlotOpen(activeSlotIndex); activeSlotIndex = null;
+                        }
+                    }
+                }
+            } else { handleRelease(); }
+        }
+
+        function toggleFullscreenMode() {
+            isFullscreenActive = !isFullscreenActive;
+            if (isFullscreenActive) { theaterOverlay.classList.add('fullscreen-active'); } 
+            else { theaterOverlay.classList.remove('fullscreen-active'); }
+        }
+
+        function handleRelease() { if (activeSlotIndex !== null) { clothModels[activeSlotIndex].grabbedNode = null; activeSlotIndex = null; } }
+
+        function lockSlotOpen(index) {
+            if (slotStates[index].opened) return;
+            slotStates[index].opened = true; clothModels[index].grabbedNode = null;
+            const assetVid = slots[index].querySelector('.asset-video'); if (assetVid) assetVid.play().catch(()=>{});
+        }
+
+        function triggerSwipeOpenAll() {
+            clothModels.forEach((cloth, idx) => {
+                if (!slotStates[idx].opened) {
+                    slotStates[idx].opened = true; cloth.grabbedNode = null;
+                    const assetVid = slots[idx].querySelector('.asset-video'); if (assetVid) assetVid.play().catch(()=>{});
+                }
+            });
+        }
+
+        function triggerSwipeCloseAll() {
+            clothModels.forEach((cloth, idx) => {
+                if (slotStates[idx].opened) {
+                    slotStates[idx].opened = false; cloth.grabbedNode = null;
+                    const assetVid = slots[idx].querySelector('.asset-video'); if (assetVid) assetVid.pause();
+                    cloth.particles.forEach(p => {
+                        if (!p.isPinned) { p.vx += (Math.random() * 0.3 - 0.15); p.vy += (Math.random() * 0.35 + 0.35); }
+                    });
+                }
+            });
+        }
+
+        function updateTheaterCarousel() {
+            const items = document.querySelectorAll('.theater-item');
+            items.forEach((item, idx) => {
+                const thVid = document.getElementById(`th-video-${idx}`);
+                if (idx === theaterActiveIndex) {
+                    item.classList.add('active'); if (thVid && thVid.paused && videoSources[idx]) thVid.play().catch(()=>{});
+                } else {
+                    item.classList.remove('active'); if (thVid) thVid.pause();
+                }
+            });
+            let offset = -theaterActiveIndex * 610; theaterCarousel.style.transform = `translateX(${offset}px)`;
+        }
+
+        function zoomVideo(index) {
+            theaterActiveIndex = index; isTheaterActive = true;
+            theaterLockUntil = performance.now() + 1000; 
+            
+            for(let i=0; i<9; i++) {
+                const gridVid = slots[i].querySelector('.asset-video'); const thVid = document.getElementById(`th-video-${i}`);
+                if(gridVid && thVid && videoSources[i]) thVid.currentTime = gridVid.currentTime;
+            }
+            theaterOverlay.classList.add('active'); mainStage.classList.add('blurred'); updateTheaterCarousel();
+        }
+
+        function closeTheater() {
+            isTheaterActive = false; isFullscreenActive = false;
+            theaterOverlay.classList.remove('active', 'fullscreen-active'); mainStage.classList.remove('blurred');
+            progressBar.style.width = '0%';
+            for(let i=0; i<9; i++) {
+                const gridVid = slots[i].querySelector('.asset-video'); const thVid = document.getElementById(`th-video-${i}`);
+                if(gridVid && thVid && videoSources[i]) {
+                    gridVid.currentTime = thVid.currentTime;
+                    if (slotStates[i].opened) gridVid.play().catch(()=>{});
+                    thVid.pause();
+                }
+            }
+            setTimeout(alignCurtainVideos, 50);
+        }
+
+        function setTheaterIndex(index) { if(videoSources[index] && !isFullscreenActive) { theaterActiveIndex = index; updateTheaterCarousel(); } }
+
+        function physicsLoop() {
+            if (isTheaterActive) {
+                requestAnimationFrame(physicsLoop);
+                return;
+            }
+
+            const dt = 0.016; const gravity = 0.45; const damping = 0.93; const stiffness = 28.0;
+
+            clothModels.forEach((cloth, index) => {
+                let pts = cloth.particles;
+                pts.forEach((p, idx) => {
+                    if (p.isPinned || idx === cloth.grabbedNode) return;
+                    p.vy += gravity * dt;
+                    if (slotStates[index].opened) {
+                        p.vx += (p.ox - p.x) * 6.0 * dt; p.vy += (0 - p.y) * 7.5 * dt;
+                    } else {
+                        if (cloth.grabbedNode !== null) {
+                            p.vx += (p.ox - p.x) * 2.5 * dt; p.vy += (p.oy - p.y) * 2.5 * dt;
+                        } else {
+                            p.vx += (p.ox - p.x) * 45.0 * dt; p.vy += (p.oy - p.y) * 45.0 * dt;
+                        }
+                    }
+                    p.x += p.vx; p.y += p.vy; p.vx *= damping; p.vy *= damping;
+                });
+
+                for (let k = 0; k < 5; k++) {
+                    cloth.springs.forEach(s => {
+                        let p1 = pts[s.p1]; let p2 = pts[s.p2];
+                        let dx = p2.x - p1.x; let dy = p2.y - p1.y; let dist = Math.hypot(dx, dy); if (dist === 0) return;
+                        let diff = (s.len - dist) / dist * 0.5 * stiffness * dt; let offsetX = dx * diff; let offsetY = dy * diff;
+                        if (!p1.isPinned && s.p1 !== cloth.grabbedNode) { p1.x -= offsetX; p1.y -= offsetY; }
+                        if (!p2.isPinned && s.p2 !== cloth.grabbedNode) { p2.x += offsetX; p2.y += offsetY; }
+                    });
+                }
+                renderClothClip(index, pts);
+            });
+            requestAnimationFrame(physicsLoop);
+        }
+
+        function renderClothClip(index, pts) {
+            const pathEl = document.getElementById(`path-${index}`); if (!pathEl) return;
+            let boundaryPoints = [];
+            for (let x = 0; x <= GRID_W; x++) boundaryPoints.push(pts[0 * (GRID_W + 1) + x]);
+            for (let y = 1; y <= GRID_H; y++) boundaryPoints.push(pts[y * (GRID_W + 1) + GRID_W]);
+            for (let x = GRID_W - 1; x >= 0; x--) boundaryPoints.push(pts[GRID_H * (GRID_W + 1) + x]);
+            for (let y = GRID_H - 1; y >= 1; y--) boundaryPoints.push(pts[y * (GRID_W + 1) + 0]);
+
+            let dStr = `M ${boundaryPoints[0].x} ${boundaryPoints[0].y}`;
+            for (let i = 1; i < boundaryPoints.length; i++) dStr += ` L ${boundaryPoints[i].x} ${boundaryPoints[i].y}`;
+            dStr += " Z"; pathEl.setAttribute('d', dStr);
+        }
+
+        let isMouseDown = false; let isRightClick = false;
+        window.addEventListener('contextmenu', e => { if (!setupOverlay.classList.contains('hidden')) e.preventDefault(); });
+        window.addEventListener('mousedown', (e) => {
+            if (!setupOverlay.classList.contains('hidden')) return;
+            const mouseX = e.clientX / window.innerWidth; const mouseY = e.clientY / window.innerHeight;
+            if (isTheaterActive) return;
+            if (e.button === 2) { isRightClick = true; lastHandX = mouseX; return; }
+            const slotIdx = getSlotIndexFromCoords(mouseX, mouseY);
+            if (slotIdx !== null && slotIdx < 9) {
+                if (slotStates[slotIdx].opened && e.shiftKey) { zoomVideo(slotIdx); return; }
+                if (!slotStates[slotIdx].opened) {
+                    isMouseDown = true; activeSlotIndex = slotIdx; const cloth = clothModels[slotIdx]; const rect = slots[slotIdx].getBoundingClientRect();
+                    let hx = (e.clientX - rect.left) / rect.width; let hy = (e.clientY - rect.top) / rect.height;
+                    let nX = Math.round(Math.min(1, Math.max(0, hx)) * GRID_W); let nY = Math.round(Math.min(1, Math.max(0, hy)) * GRID_H);
+                    cloth.grabbedNode = nY * (GRID_W + 1) + nX;
+                }
+            }
+        });
+        window.addEventListener('mousemove', (e) => {
+            const mouseX = e.clientX / window.innerWidth;
+            if (isRightClick) {
+                let delta = mouseX - lastHandX;
+                if (delta > 0.028) { triggerSwipeOpenAll(); isRightClick = false; }
+                else if (delta < -0.028) { triggerSwipeCloseAll(); isRightClick = false; }
+                lastHandX = mouseX; return;
+            }
+            if (!isMouseDown || activeSlotIndex === null) return;
+            const cloth = clothModels[activeSlotIndex]; const rect = slots[activeSlotIndex].getBoundingClientRect();
+            let hx = (e.clientX - rect.left) / rect.width; let hy = (e.clientY - rect.top) / rect.height;
+            if (cloth.grabbedNode !== null) {
+                let p = cloth.particles[cloth.grabbedNode]; p.x = hx; p.y = hy;
+                let pullDistance = Math.hypot(p.x - p.ox, p.y - p.oy);
+                if (pullDistance > 0.28 || hy > 0.75 || hx < 0.12 || hx > 0.88) { lockSlotOpen(activeSlotIndex); isMouseDown = false; activeSlotIndex = null; }
+            }
+        });
+        window.addEventListener('mouseup', () => { isMouseDown = false; isRightClick = false; handleRelease(); lastHandX = 0; });
+        document.addEventListener('keydown', (e) => { 
+            if (e.key === 'Escape') closeTheater(); 
+            if ((e.key === 'f' || e.key === 'F') && isTheaterActive) toggleFullscreenMode();
+        });
+    </script>
+</body>
+</html>
